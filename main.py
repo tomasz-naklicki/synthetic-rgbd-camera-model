@@ -1,8 +1,11 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
-import os
 import open3d as o3d
+import numpy as np
+from scipy.interpolate import griddata
+from scipy.ndimage import minimum_filter
 
 # --- Camera Calibration Data ---
 
@@ -56,6 +59,53 @@ T_real = [
 # T_real = np.eye(4)
 
 ############im bardziej skomplikowana ta macierz tym gorzej działa -> błędy numeryczne?, czemu ostatni wiersz musi mieć zmieniony znak???? OS X
+
+
+def filter_depth_with_local_average(
+    depth_img: np.ndarray, kernel_size: int = 3
+) -> np.ndarray:
+    """
+    For each pixel, compare its depth value to the average of the valid surrounding pixels.
+    Replace it with the closer value (min of both).
+
+    Parameters:
+        depth_img: 2D array of float32 values (depth in meters).
+        kernel_size: Size of the square neighborhood (default: 3x3).
+
+    Returns:
+        Filtered depth image (same shape, dtype float32).
+    """
+    mask_valid = np.isfinite(depth_img) & (depth_img > 0)
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.float32)
+
+    sum_valid = cv2.filter2D(mask_valid.astype(np.float32), -1, kernel)
+    sum_depth = cv2.filter2D(np.nan_to_num(depth_img) * mask_valid, -1, kernel)
+
+    avg_depth = np.divide(
+        sum_depth, sum_valid, out=np.zeros_like(sum_depth), where=sum_valid > 0
+    )
+    filtered_depth = np.where(mask_valid, np.minimum(depth_img, avg_depth), depth_img)
+    return filtered_depth
+
+
+def filter_depth_with_local_min_scipy(
+    depth_img: np.ndarray, kernel_size: int = 3
+) -> np.ndarray:
+    """
+    Jak wyżej, ale korzysta z scipy.ndimage.minimum_filter.
+    """
+    mask_valid = np.isfinite(depth_img) & (depth_img > 0)
+    # NaN → +inf, aby nie brać ich pod uwagę
+    depth_inf = np.where(mask_valid, depth_img, np.inf)
+
+    # aplikuj minimum_filter
+    local_min = minimum_filter(
+        depth_inf, size=kernel_size, mode="constant", cval=np.inf
+    )
+
+    # zachowaj oryginalne NaN-y
+    filtered = np.where(mask_valid, np.minimum(depth_img, local_min), depth_img)
+    return filtered.astype(np.float32)
 
 
 # --- Step 1: Project Depth Image to 3D Point Cloud in Depth Camera Frame ---
@@ -234,7 +284,7 @@ pcd.colors = o3d.utility.Vector3dVector(colors)
 if not os.path.exists("output"):
     os.makedirs("output")
 o3d.io.write_point_cloud("output/colored_pointcloud.ply", pcd)
-
+print(f"not_filled: {pcd}")
 # 4) Interaktywna wizualizacja:
 o3d.visualization.draw_geometries(
     [pcd], window_name="Kolorowy PointCloud", width=1280, height=720
@@ -282,6 +332,113 @@ for ui, vi, zi in zip(
 ):  # tutaj "_" to filtered_depths zwrócone z project_points...
     if 0 <= ui < W and 0 <= vi < H:
         depth_reproj[vi, ui] = zi
+
+
+mask_valid = ~np.isnan(depth_reproj)
+mask_invalid = np.isnan(depth_reproj)
+
+# 2) Distance transform to find holes near real samples
+dist = cv2.distanceTransform(mask_invalid.astype(np.uint8), cv2.DIST_L2, maskSize=5)
+
+max_radius = 5
+mask_fill = mask_invalid & (dist <= max_radius)
+# 4) Block edge regions so we don't fill across depth discontinuities
+gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
+d = depth_reproj.copy()
+d[np.isnan(d)] = 0.0
+# gradient w kierunku X i Y
+sobelx = cv2.Sobel(d, cv2.CV_32F, 1, 0, ksize=3)
+sobely = cv2.Sobel(d, cv2.CV_32F, 0, 1, ksize=3)
+
+# 4.2) magnituda gradientu
+grad_mag = np.hypot(sobelx, sobely)
+
+# 4.3) maska miejsc o dużym gradiencie
+grad_thresh = 0.08  # [m/piksel] – dostosuj wg zakresu głębi
+mask_depth_edges = grad_mag > grad_thresh
+
+# 4.4) (Opcjonalnie) rozsuń maskę krawędzi głębi
+kernel = np.ones((15, 15), np.uint8)
+mask_depth_edges = cv2.dilate(
+    mask_depth_edges.astype(np.uint8), kernel, iterations=1
+).astype(bool)
+
+# 4.5) Usuń strefy dyskontynuacji z mask_fill
+fill_inside_px = 2  # tune this: holes closer than 5px to an edge will NOT be filled
+# distance from the nearest edge pixel (i.e., inside edge zones)
+edge_mask_uint8 = mask_depth_edges.astype(np.uint8)
+edge_dist = cv2.distanceTransform(edge_mask_uint8, cv2.DIST_L2, 5)
+
+# only allow filling of NaNs that are at least N pixels away from any edge
+mask_fill = mask_invalid & (edge_dist >= fill_inside_px)
+
+# 3) (Optional) visualize your new mask_fill
+import matplotlib.patches as mpatches
+
+plt.figure(figsize=(6, 6))
+plt.imshow(mask_fill, cmap="gray", origin="upper")
+plt.title(f"mask_fill (white = to fill inside edges ≥{fill_inside_px}px)")
+plt.axis("off")
+white_patch = mpatches.Patch(color="white", label="to fill")
+black_patch = mpatches.Patch(color="black", label="keep")
+plt.legend(handles=[white_patch, black_patch], loc="lower right")
+plt.show()
+
+# 5) Prepare known & to-be-filled lists
+rv, cvv = np.where(mask_valid)
+pts_valid = np.column_stack((cvv, rv))
+vals_valid = depth_reproj[rv, cvv]
+rf, cf = np.where(mask_fill)
+pts_fill = np.column_stack((cf, rf))
+
+
+# 6) Interpolate only at those hole locations
+filled_vals = griddata(
+    pts_valid, vals_valid, (pts_fill[:, 0], pts_fill[:, 1]), method="nearest"
+)
+
+# 8) Zapisz wynik w depth_filled
+depth_filled = depth_reproj.copy()
+ok = ~np.isnan(filled_vals)
+depth_filled[rf[ok], cf[ok]] = filled_vals[ok]
+
+
+plt.figure(figsize=(6, 6))
+plt.imshow(depth_filled, cmap="jet", origin="upper")
+plt.scatter(cvv, rv, s=1, c="white", marker=".", label="original")
+plt.scatter(cf[ok], rf[ok], s=1, c="black", marker=".", label="filled")
+plt.legend(loc="lower right")
+plt.title("Local Fill, only within %d px" % max_radius)
+plt.axis("off")
+plt.show()
+
+depth_filled_filtered = filter_depth_with_local_min_scipy(depth_filled)
+# 8) Now back-project only those pixels into 3D in the RGB frame:
+valid_pixels = ~np.isnan(depth_filled_filtered)
+vs, us = np.where(valid_pixels)  # row, col of only the good depths
+Z = depth_filled_filtered[vs, us]  # now Z contains no NaNs
+
+# back-project in RGB frame:
+X = (us - cx_rgb) * Z / fx_rgb
+Y = (vs - cy_rgb) * Z / fy_rgb
+
+points_rgb = np.stack([X, Y, Z], axis=1)
+colors = rgb_img[vs, us].astype(np.float32) / 255.0
+
+# 9) Build & save the dense Open3D point cloud exactly like before:
+pcd = o3d.geometry.PointCloud()
+pcd.points = o3d.utility.Vector3dVector(points_rgb)
+pcd.colors = o3d.utility.Vector3dVector(colors)
+
+if not os.path.exists("output"):
+    os.makedirs("output")
+o3d.io.write_point_cloud("output/colored_pointcloud_local_fill.ply", pcd)
+
+print(f"filled: {pcd}")
+# 5) Wyświetl z domyślnym framingiem
+o3d.visualization.draw_geometries(
+    [pcd], window_name="Radius Outlier Removal", width=1280, height=720
+)
 
 plt.figure(figsize=(6, 6))
 plt.imshow(depth_reproj, cmap="gray", origin="upper")
