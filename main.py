@@ -22,8 +22,6 @@ dist_depth = np.array(
     dtype=np.float64,
 )
 
-dist_depth = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
-
 
 # RGB camera intrinsics
 fx_rgb = 1.039 / 0.00125
@@ -41,11 +39,12 @@ dist_rgb = np.array(
 )
 
 #############################aligned
-fx_d = fx_rgb
-fy_d = fy_rgb
-cx_d = cx_rgb
-cy_d = cy_rgb
-K_depth = np.array([[fx_d, 0, cx_d], [0, fy_d, cy_d], [0, 0, 1]])
+# fx_d = fx_rgb
+# fy_d = fy_rgb
+# cx_d = cx_rgb
+# cy_d = cy_rgb
+# K_depth = np.array([[fx_d, 0, cx_d], [0, fy_d, cy_d], [0, 0, 1]])
+# dist_depth = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
 
 # T_from_blender = [
 #     [0.99404520, 0.00560837, -0.10874305, -0.03248300],
@@ -64,7 +63,7 @@ T_real = [
 
 F = np.diag([-1, 1, -1, 1]).astype(np.float32)
 
-T_real = np.eye(4)
+# T_real = np.eye(4)
 
 
 # T_real = F @ T_real @ F
@@ -256,11 +255,11 @@ def project_points_to_pixels_filtered(points_rgb, K_rgb, image_shape):
 # --- Example Data & Usage ---
 
 # depth_img = cv2.imread("rendered/render_with_compositing_0.png", cv2.IMREAD_UNCHANGED)
-depth_img = cv2.imread("rendered/depth_0000.png", cv2.IMREAD_UNCHANGED)
+depth_img = cv2.imread("img/depth_0000.png", cv2.IMREAD_UNCHANGED)
 print("depth:", depth_img.dtype, depth_img.min(), depth_img.max())
 
 # rgb_img = cv2.imread("rendered/render_no_compositing_0.png")
-rgb_img = cv2.imread("rendered/rgb_0000.png")
+rgb_img = cv2.imread("img/rgb_0000.png")
 rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
 
 print("DEBUG: depth_img.shape =", depth_img.shape)
@@ -296,7 +295,7 @@ pcd.points = o3d.utility.Vector3dVector(pc_rgb_via_inv[idx])
 pcd.colors = o3d.utility.Vector3dVector(colors)
 
 # 3) Zapis do pliku PLY:
-o3d.io.write_point_cloud("colored_pointcloud.ply", pcd)
+o3d.io.write_point_cloud("output/colored_pointcloud.ply", pcd)
 
 # 4) Interaktywna wizualizacja:
 o3d.visualization.draw_geometries(
