@@ -39,21 +39,6 @@ dist_rgb = np.array(
     [0.079764, -0.108468, -0.000167, -0.000509, 0.044803], dtype=np.float64
 )
 
-#############################aligned
-# fx_d = fx_rgb
-# fy_d = fy_rgb
-# cx_d = cx_rgb
-# cy_d = cy_rgb
-# K_depth = np.array([[fx_d, 0, cx_d], [0, fy_d, cy_d], [0, 0, 1]])
-# dist_depth = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
-
-# T_from_blender = [
-#     [0.99404520, 0.00560837, -0.10874305, -0.03248300],
-#     [-0.00527298, 0.99998039, 0.00336748, 0.00138313],
-#     [0.10875984, -0.00277311, 0.99405527, 0.00255620],
-#     [0.00000000, 0.00000000, 0.00000000, 1.00000000],
-# ]
-
 
 T_real = [
     [0.994052, 0.002774, 0.005608, -32.665543 / 1000.0],
@@ -62,14 +47,17 @@ T_real = [
     [0.0, 0.0, 0.0, 1.0],
 ]
 
-F = np.diag([-1, 1, -1, 1]).astype(np.float32)
+#############################aligned
+# fx_d = fx_rgb
+# fy_d = fy_rgb
+# cx_d = cx_rgb
+# cy_d = cy_rgb
+# K_depth = np.array([[fx_d, 0, cx_d], [0, fy_d, cy_d], [0, 0, 1]])
+# dist_depth = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
 
 # T_real = np.eye(4)
 
-
-# T_real = F @ T_real @ F
 ############im bardziej skomplikowana ta macierz tym gorzej działa -> błędy numeryczne?, czemu ostatni wiersz musi mieć zmieniony znak???? OS X
-
 
 # --- Step 1: Project Depth Image to 3D Point Cloud in Depth Camera Frame ---
 def depth_image_to_point_cloud_with_K(depth_img, K, dist_coeffs):
@@ -87,53 +75,10 @@ def depth_image_to_point_cloud_with_K(depth_img, K, dist_coeffs):
                      for M <= H*W valid pixels.
     """
     H, W = depth_img.shape
-    # near, far = 0.1, 15.0
-
-    # # 1) Normalize and map back to meters
-    # normalized = depth_img.astype(np.float32) / 65535.0
-    # # depth_m = normalized * (far - near) + near
     depth_m = depth_img.astype(np.float32) / 1000.0
-    # print("depth_m range:", depth_m.min(), depth_m.max())
-
-    # # 2) Build mask of “real” pixels (drop those at or above the far‐clip)
-    # valid_mask = (normalized.flatten() > 1e-3) & (normalized.flatten() < 0.999)
-
-    # # 3) Flatten and mask depths
-    # depth_flat = depth_m.flatten()[valid_mask.flatten()]
-    # # 4) Build and mask pixel coordinates
-    # u, v = np.meshgrid(np.arange(W), np.arange(H))
-    # uv1 = np.stack((u, v, np.ones_like(u)), axis=0).reshape(3, -1)
-    # uv1 = uv1[:, valid_mask.flatten()]
-
-    # print("→ u range:", u.min(), u.max())
-    # print("→ v range:", v.min(), v.max())
-    # print("→ obraz ma W,H =", rgb_img.shape[1], rgb_img.shape[0])
-    # print("→ ile punktów przed filtrem:", u.size)
-
-    # # 5) Back‐project only valid pixels
-    # K_inv = np.linalg.inv(K)
-    # dirs = K_inv @ (uv1)  # shape (3, M)
-    # lengths = np.linalg.norm(dirs, axis=0)
-    # unit_dirs = dirs / lengths  # unit‐length rays
-
-    # z_axial = depth_flat / lengths  # actual Z along camera axis
-    # points = unit_dirs * depth_flat  # this gives [x',y',1]*depth_rad
-    # # but to be precise, X = x'*z_axial, Y = y'*z_axial, Z = z_axial:
-    # X = dirs[0] * z_axial / dirs[2]
-    # Y = dirs[1] * z_axial / dirs[2]
-    # Z = z_axial
-
-    # point_cloud = np.stack((X, Y, Z), axis=-1)
-
     u, v = np.meshgrid(np.arange(W), np.arange(H))
     # maska nie-zerowych pikseli (głębia w mm)
     valid = (depth_m > 0.001) & (depth_m < 5)
-    # u_valid = u[valid]
-    # v_valid = v[valid]
-    # Z = depth_m[valid]
-    # X = (u_valid - cx_d) * Z / fx_d
-    # Y = (v_valid - cy_d) * Z / fy_d
-    # point_cloud = np.stack((X, Y, Z), axis=-1)
 
     # return point_cloud
     uv = np.stack([u[valid], v[valid]], axis=1)  # shape=(N,2)
@@ -266,10 +211,6 @@ rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
 print("DEBUG: depth_img.shape =", depth_img.shape)
 print("DEBUG: rgb_img.shape   =", rgb_img.shape)
 
-
-# depth_u = cv2.undistort(depth_img, K_depth, dist_depth, None, K_depth)
-# rgb_u = cv2.undistort(rgb_img,   K_rgb,   dist_rgb,   None, K_rgb)
-
 # ----- Step 1: Convert Depth Image to Point Cloud -----
 point_cloud_depth = depth_image_to_point_cloud_with_K(
     depth_img, K_depth, dist_coeffs=dist_depth
@@ -284,8 +225,6 @@ proj1, filt_depth1, idx, colors = project_points_to_pixels_filtered(
     pc_rgb_via_inv, K_rgb, rgb_img.shape[:2]
 )
 
-
-# proj2, _, _ = project_points_to_pixels_filtered(pc_rgb_via_direct,K_rgb, rgb_img.shape[:2])
 
 import open3d as o3d
 
