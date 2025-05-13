@@ -4,6 +4,7 @@ from scipy.spatial.transform import Rotation
 import cv2
 from numpy.linalg import inv
 import mathutils
+import os
 
 # --- Camera Calibration Data ---
 
@@ -295,6 +296,8 @@ pcd.points = o3d.utility.Vector3dVector(pc_rgb_via_inv[idx])
 pcd.colors = o3d.utility.Vector3dVector(colors)
 
 # 3) Zapis do pliku PLY:
+if not os.path.exists("output"):
+    os.makedirs("output")
 o3d.io.write_point_cloud("output/colored_pointcloud.ply", pcd)
 
 # 4) Interaktywna wizualizacja:
