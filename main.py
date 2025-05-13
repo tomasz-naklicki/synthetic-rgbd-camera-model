@@ -1,10 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.spatial.transform import Rotation
 import cv2
-from numpy.linalg import inv
-import mathutils
 import os
+import open3d as o3d
 
 # --- Camera Calibration Data ---
 
@@ -58,6 +56,7 @@ T_real = [
 # T_real = np.eye(4)
 
 ############im bardziej skomplikowana ta macierz tym gorzej działa -> błędy numeryczne?, czemu ostatni wiersz musi mieć zmieniony znak???? OS X
+
 
 # --- Step 1: Project Depth Image to 3D Point Cloud in Depth Camera Frame ---
 def depth_image_to_point_cloud_with_K(depth_img, K, dist_coeffs):
@@ -225,9 +224,6 @@ proj1, filt_depth1, idx, colors = project_points_to_pixels_filtered(
     pc_rgb_via_inv, K_rgb, rgb_img.shape[:2]
 )
 
-
-import open3d as o3d
-
 pcd = o3d.geometry.PointCloud()
 # punkty w przestrzeni RGB:
 pcd.points = o3d.utility.Vector3dVector(pc_rgb_via_inv[idx])
@@ -298,51 +294,4 @@ plt.imshow(depth_reproj, cmap="jet", origin="upper")
 plt.colorbar(label="Depth [m]")
 plt.title("Reprojected Depth Map (jet)")
 plt.axis("off")
-plt.show()
-
-
-from scipy.interpolate import griddata
-
-input_depth = depth_reproj.copy()
-
-# mask
-valid_mask = ~np.isnan(input_depth)
-kernel = np.ones((5, 5), np.uint8)
-eroded_mask = cv2.erode(valid_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
-
-H, W = input_depth.shape
-u, v = np.meshgrid(np.arange(W), np.arange(H))
-
-if np.count_nonzero(eroded_mask) < 20:
-    print("eroded_mask is too sparse; falling back to full valid_mask")
-    eroded_mask = valid_mask
-
-known_coords = np.stack((v[eroded_mask], u[eroded_mask]), axis=-1)
-known_values = input_depth[eroded_mask]
-
-# Step 5: Prepare target coordinates (interior NaNs only)
-target_mask = np.isnan(input_depth) & (
-    cv2.dilate(eroded_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
-)
-target_coords = np.stack((v[target_mask], u[target_mask]), axis=-1)
-
-# Step 6: Use griddata to interpolate missing values
-if known_coords.size > 0 and target_coords.size > 0:
-    inpainted_values = griddata(
-        known_coords, known_values, target_coords, method="linear"
-    )
-else:
-    print("not enough valid data.")
-    inpainted_values = np.array([])
-
-inpainted_depth = input_depth.copy()
-if inpainted_values.size > 0:
-    inpainted_depth[target_mask] = inpainted_values
-
-plt.figure(figsize=(6, 6))
-plt.imshow(inpainted_depth, cmap="jet", origin="upper")
-plt.colorbar(label="Depth [m]")
-plt.title("Inpainted Depth Map (Preserving Background NaNs)")
-plt.axis("off")
-plt.show()
 plt.show()

@@ -1,3 +1,6 @@
 rendered/
 img/
 output/
+.vscode/
+.venv/
+venv/
