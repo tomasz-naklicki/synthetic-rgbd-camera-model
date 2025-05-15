@@ -6,18 +6,81 @@ import open3d as o3d
 import numpy as np
 from scipy.interpolate import griddata
 from scipy.ndimage import minimum_filter
+import math
+
+
+
+def equisolid_undistortPoints(pts, K, D=None, P=None, eps=1e-8):
+    """
+    Odwraca projekcję Equisolid‐Angle (Fisheye Equisolid) do zwykłych, 
+    niezdystorsowanych współrzędnych.
+
+    Wejście:
+      pts – tablica o kształcie (N,1,2) lub (N,2) z pikselowymi współrzędnymi [u,v]
+      K   – macierz wewnętrzna kamery 3×3 (fx, fy, cx, cy)
+      D   – ignorowane (tu dla zgodności z cv2.undistortPoints)
+      P   – gdy podane, traktowane jak nowa macierz kamery; punkty 
+            zwracane będą od razu w pikselach tej macierzy.
+            Jeśli P=None, zwracamy N×1×2 współrzędnych znormalizowanych.
+
+    Zwraca:
+      tablicę kształtu (N,1,2) z (x, y) – 
+        * albo w znormalizowanych jednostkach (gdy P=None),
+        * albo w pikselach (gdy podasz macierz P).
+    """
+    pts_arr = pts.reshape(-1, 2).astype(np.float64)
+    fx, fy = K[0,0], K[1,1]
+    cx, cy = K[0,2], K[1,2]
+
+    # 1) z pikseli na "znormalizowane" equisolid
+    x_d = (pts_arr[:,0] - cx) / fx
+    y_d = (pts_arr[:,1] - cy) / fy
+    r_d = np.hypot(x_d, y_d)
+
+    # 2) theta ze wzoru r_d_norm = 2*sin(theta/2)
+    #    -> theta = 2*arcsin(r_d/2)
+    arg = np.clip(r_d/2, -1.0, 1.0)
+    theta = 2.0 * np.arcsin(arg)
+
+    # 3) przemapowanie do perspektywy: r_p = tan(theta)
+    r_p = np.tan(theta)
+
+    # 4) odbudowa składowych
+    #    gdy r_d~0, unikamy dzielenia przez zero
+    u = np.where(r_d>eps, x_d/r_d * r_p, 0.0)
+    v = np.where(r_d>eps, y_d/r_d * r_p, 0.0)
+
+    out = np.stack([u, v], axis=-1)
+
+    if P is not None:
+        # jeśli podano nową macierz projekcji, rzutujemy na pixele P
+        fx2, fy2 = P[0,0], P[1,1]
+        cx2, cy2 = P[0,2], P[1,2]
+        out = np.stack([out[:,0]*fx2 + cx2,
+                        out[:,1]*fy2 + cy2], axis=-1)
+
+    return out.reshape(-1,1,2).astype(np.float32)
+
 
 # --- Camera Calibration Data ---
 
 # Depth camera intrinsics
-fx_d = 0.8832 / 0.0035
-fy_d = 0.8832 / 0.0035
-fx_d = 252.376083
-fy_d = 252.347733
-# cx_d = 258.8008728027344
-# cy_d = 254.26467895507812
-cx_d = 258.800873
-cy_d = 254.264679
+# fx_d = 0.8832 / 0.0035
+# fy_d = 0.8832 / 0.0035
+# # fx_d = 252.376083
+# # fy_d = 252.347733
+# # cx_d = 258.8008728027344
+# # cy_d = 254.26467895507812
+# cx_d = 258.800873
+# cy_d = 254.264679
+
+
+fx_d = 504.752167
+fy_d = 504.695465
+cx_d = 517.601746
+cy_d = 508.529358
+
+
 K_depth = np.array([[fx_d, 0, cx_d], [0, fy_d, cy_d], [0, 0, 1]])
 dist_depth = np.array(
     [12.565655, 6.072149, 0.000045, 0.000020, 0.208180, 12.887096, 10.294142, 1.362217],
@@ -26,15 +89,21 @@ dist_depth = np.array(
 
 
 # RGB camera intrinsics
-fx_rgb = 1.039 / 0.00125
-fy_rgb = 1.039 / 0.00125
-fx_rgb = 747.707031
-fy_rgb = 747.948425
+# fx_rgb = 1.039 / 0.00125
+# fy_rgb = 1.039 / 0.00125
+# # fx_rgb = 747.707031
+# # fy_rgb = 747.948425
 
-# cx_rgb = 626.0764770507812
-# cy_rgb = 356.4728698730469
-cx_rgb = 626.076477
-cy_rgb = 356.472870
+# # cx_rgb = 626.0764770507812
+# # cy_rgb = 356.4728698730469
+# cx_rgb = 626.076477
+# cy_rgb = 356.472870
+
+fx_rgb = 1121.560547
+fy_rgb = 1121.922607
+cx_rgb = 939.114746
+cy_rgb = 534.709290
+
 K_rgb = np.array([[fx_rgb, 0, cx_rgb], [0, fy_rgb, cy_rgb], [0, 0, 1]])
 dist_rgb = np.array(
     [0.079764, -0.108468, -0.000167, -0.000509, 0.044803], dtype=np.float64
@@ -135,13 +204,17 @@ def depth_image_to_point_cloud_with_K(depth_img, K, dist_coeffs):
 
     # 3) Undistortuj te piksele do normalizowanych współrzędnych promienia
     pts = uv.reshape(-1, 1, 2).astype(np.float32)
-    undist = cv2.undistortPoints(pts, K, dist_coeffs, P=None)  # shape=(N,1,2)
+    # undist = cv2.undistortPoints(pts, K, dist_coeffs, P=None)  # shape=(N,1,2)
+    undist = equisolid_undistortPoints(pts, K_depth, D=None, P=None)
     x_norm = undist[:, 0, 0]
     y_norm = undist[:, 0, 1]
 
-    # 4) Back-project: (X,Y,Z) = (x_norm*Z, y_norm*Z, Z)
-    X = x_norm * Z
-    Y = y_norm * Z
+    denom = np.sqrt(1.0 + x_norm**2 + y_norm**2)
+    Z_cam = Z / denom
+    # # 4) Back-project: (X,Y,Z) = (x_norm*Z, y_norm*Z, Z)
+    X = x_norm * Z_cam
+    Y = y_norm * Z_cam
+    Z = Z_cam
     points = np.stack([X, Y, Z], axis=1)  # shape=(N,3)
 
     return points
@@ -249,12 +322,12 @@ def project_points_to_pixels_filtered(points_rgb, K_rgb, image_shape):
 
 # --- Example Data & Usage ---
 
-# depth_img = cv2.imread("rendered/render_with_compositing_0.png", cv2.IMREAD_UNCHANGED)
-depth_img = cv2.imread("img/depth_0000.png", cv2.IMREAD_UNCHANGED)
+depth_img = cv2.imread("rendered/render_with_compositing_0fish1.png", cv2.IMREAD_UNCHANGED)
+# depth_img = cv2.imread("img/depth_0000.png", cv2.IMREAD_UNCHANGED)
 print("depth:", depth_img.dtype, depth_img.min(), depth_img.max())
 
-# rgb_img = cv2.imread("rendered/render_no_compositing_0.png")
-rgb_img = cv2.imread("img/rgb_0000.png")
+rgb_img = cv2.imread("rendered/render_no_compositing_0fish1.png")
+# rgb_img = cv2.imread("img/rgb_0000.png")
 rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
 
 print("DEBUG: depth_img.shape =", depth_img.shape)
@@ -287,7 +360,7 @@ o3d.io.write_point_cloud("output/colored_pointcloud.ply", pcd)
 print(f"not_filled: {pcd}")
 # 4) Interaktywna wizualizacja:
 o3d.visualization.draw_geometries(
-    [pcd], window_name="Kolorowy PointCloud", width=1280, height=720
+    [pcd], window_name="Kolorowy PointCloud", width=1920, height=1080
 )
 
 # 3) Plot them on top of your real RGB image:
@@ -437,7 +510,7 @@ o3d.io.write_point_cloud("output/colored_pointcloud_local_fill.ply", pcd)
 print(f"filled: {pcd}")
 # 5) Wyświetl z domyślnym framingiem
 o3d.visualization.draw_geometries(
-    [pcd], window_name="Radius Outlier Removal", width=1280, height=720
+    [pcd], window_name="Radius Outlier Removal", width=1920, height=1080
 )
 
 plt.figure(figsize=(6, 6))
