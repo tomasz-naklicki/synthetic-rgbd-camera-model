@@ -9,37 +9,36 @@ from scipy.ndimage import minimum_filter
 import math
 
 
-
 def equisolid_undistortPoints(pts, K, D=None, P=None, eps=1e-8):
     """
-    Odwraca projekcję Equisolid‐Angle (Fisheye Equisolid) do zwykłych, 
+    Odwraca projekcję Equisolid‐Angle (Fisheye Equisolid) do zwykłych,
     niezdystorsowanych współrzędnych.
 
     Wejście:
       pts – tablica o kształcie (N,1,2) lub (N,2) z pikselowymi współrzędnymi [u,v]
       K   – macierz wewnętrzna kamery 3×3 (fx, fy, cx, cy)
       D   – ignorowane (tu dla zgodności z cv2.undistortPoints)
-      P   – gdy podane, traktowane jak nowa macierz kamery; punkty 
+      P   – gdy podane, traktowane jak nowa macierz kamery; punkty
             zwracane będą od razu w pikselach tej macierzy.
             Jeśli P=None, zwracamy N×1×2 współrzędnych znormalizowanych.
 
     Zwraca:
-      tablicę kształtu (N,1,2) z (x, y) – 
+      tablicę kształtu (N,1,2) z (x, y) –
         * albo w znormalizowanych jednostkach (gdy P=None),
         * albo w pikselach (gdy podasz macierz P).
     """
     pts_arr = pts.reshape(-1, 2).astype(np.float64)
-    fx, fy = K[0,0], K[1,1]
-    cx, cy = K[0,2], K[1,2]
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
 
     # 1) z pikseli na "znormalizowane" equisolid
-    x_d = (pts_arr[:,0] - cx) / fx
-    y_d = (pts_arr[:,1] - cy) / fy
+    x_d = (pts_arr[:, 0] - cx) / fx
+    y_d = (pts_arr[:, 1] - cy) / fy
     r_d = np.hypot(x_d, y_d)
 
     # 2) theta ze wzoru r_d_norm = 2*sin(theta/2)
     #    -> theta = 2*arcsin(r_d/2)
-    arg = np.clip(r_d/2, -1.0, 1.0)
+    arg = np.clip(r_d / 2, -1.0, 1.0)
     theta = 2.0 * np.arcsin(arg)
 
     # 3) przemapowanie do perspektywy: r_p = tan(theta)
@@ -47,19 +46,18 @@ def equisolid_undistortPoints(pts, K, D=None, P=None, eps=1e-8):
 
     # 4) odbudowa składowych
     #    gdy r_d~0, unikamy dzielenia przez zero
-    u = np.where(r_d>eps, x_d/r_d * r_p, 0.0)
-    v = np.where(r_d>eps, y_d/r_d * r_p, 0.0)
+    u = np.where(r_d > eps, x_d / r_d * r_p, 0.0)
+    v = np.where(r_d > eps, y_d / r_d * r_p, 0.0)
 
     out = np.stack([u, v], axis=-1)
 
     if P is not None:
         # jeśli podano nową macierz projekcji, rzutujemy na pixele P
-        fx2, fy2 = P[0,0], P[1,1]
-        cx2, cy2 = P[0,2], P[1,2]
-        out = np.stack([out[:,0]*fx2 + cx2,
-                        out[:,1]*fy2 + cy2], axis=-1)
+        fx2, fy2 = P[0, 0], P[1, 1]
+        cx2, cy2 = P[0, 2], P[1, 2]
+        out = np.stack([out[:, 0] * fx2 + cx2, out[:, 1] * fy2 + cy2], axis=-1)
 
-    return out.reshape(-1,1,2).astype(np.float32)
+    return out.reshape(-1, 1, 2).astype(np.float32)
 
 
 # --- Camera Calibration Data ---
@@ -196,7 +194,7 @@ def depth_image_to_point_cloud_with_K(depth_img, K, dist_coeffs):
     depth_m = depth_img.astype(np.float32) / 1000.0
     u, v = np.meshgrid(np.arange(W), np.arange(H))
     # maska nie-zerowych pikseli (głębia w mm)
-    valid = (depth_m > 0.001) & (depth_m < 5)
+    valid = (depth_m > 0.001) & (depth_m < 10)
 
     # return point_cloud
     uv = np.stack([u[valid], v[valid]], axis=1)  # shape=(N,2)
@@ -204,17 +202,20 @@ def depth_image_to_point_cloud_with_K(depth_img, K, dist_coeffs):
 
     # 3) Undistortuj te piksele do normalizowanych współrzędnych promienia
     pts = uv.reshape(-1, 1, 2).astype(np.float32)
-    # undist = cv2.undistortPoints(pts, K, dist_coeffs, P=None)  # shape=(N,1,2)
-    undist = equisolid_undistortPoints(pts, K_depth, D=None, P=None)
+    undist = cv2.undistortPoints(pts, K, dist_coeffs, P=None)  # shape=(N,1,2)
+    # undist = equisolid_undistortPoints(pts, K_depth, D=None, P=None)
     x_norm = undist[:, 0, 0]
     y_norm = undist[:, 0, 1]
 
     denom = np.sqrt(1.0 + x_norm**2 + y_norm**2)
     Z_cam = Z / denom
     # # 4) Back-project: (X,Y,Z) = (x_norm*Z, y_norm*Z, Z)
+    X = x_norm * Z
+    Y = y_norm * Z
     X = x_norm * Z_cam
     Y = y_norm * Z_cam
     Z = Z_cam
+
     points = np.stack([X, Y, Z], axis=1)  # shape=(N,3)
 
     return points
@@ -320,14 +321,65 @@ def project_points_to_pixels_filtered(points_rgb, K_rgb, image_shape):
     return filtered_proj_pixels, filtered_depths, indices, colors
 
 
+def save_projected_depth_image(
+    points_rgb: np.ndarray,
+    K_rgb: np.ndarray,
+    image_shape: tuple,
+    output_path: str = "output/depth_aligned_16bit.png",
+):
+    """
+    Projects a point cloud into the RGB image frame and saves it as a 16-bit grayscale image.
+
+    Parameters:
+        points_rgb: (N, 3) 3D point cloud in RGB camera space.
+        K_rgb: (3, 3) Intrinsic matrix of RGB camera.
+        image_shape: (height, width) shape of the RGB image.
+        output_path: Path to save the 16-bit PNG.
+    """
+    H, W = image_shape
+    depth_img = np.full((H, W), 0, dtype=np.uint16)
+
+    x, y, z = points_rgb[:, 0], points_rgb[:, 1], points_rgb[:, 2]
+    z_safe = np.maximum(z, 1e-6)
+
+    u = K_rgb[0, 0] * x / z_safe + K_rgb[0, 2]
+    v = K_rgb[1, 1] * y / z_safe + K_rgb[1, 2]
+
+    u_int = np.round(u).astype(np.int32)
+    v_int = np.round(v).astype(np.int32)
+
+    # Keep nearest point only
+    z_mm = (z * 1000).astype(np.uint16)  # meters to millimeters
+    depth_buffer = np.full((H, W), np.iinfo(np.uint16).max, dtype=np.uint16)
+
+    for i in range(points_rgb.shape[0]):
+        if 0 <= u_int[i] < W and 0 <= v_int[i] < H:
+            z_val = z_mm[i]
+            if z_val < depth_buffer[v_int[i], u_int[i]]:
+                depth_buffer[v_int[i], u_int[i]] = z_val
+
+    # Replace max values with 0 (invalid)
+    depth_img = np.where(depth_buffer < np.iinfo(np.uint16).max, depth_buffer, 0)
+
+    if not os.path.exists(os.path.dirname(output_path)):
+        os.makedirs(os.path.dirname(output_path))
+
+    cv2.imwrite(output_path, depth_img)
+    print(f"Saved depth image to {output_path}")
+
+
 # --- Example Data & Usage ---
 
-depth_img = cv2.imread("rendered/render_with_compositing_0fish1.png", cv2.IMREAD_UNCHANGED)
-# depth_img = cv2.imread("img/depth_0000.png", cv2.IMREAD_UNCHANGED)
+# depth_img = cv2.imread(
+#     "rendered/render_with_compositing_0_noise.png", cv2.IMREAD_UNCHANGED
+# )
+depth_img = cv2.imread(
+    "chybadobre/render_with_compositing_noise.png", cv2.IMREAD_UNCHANGED
+)
 print("depth:", depth_img.dtype, depth_img.min(), depth_img.max())
 
-rgb_img = cv2.imread("rendered/render_no_compositing_0fish1.png")
-# rgb_img = cv2.imread("img/rgb_0000.png")
+# rgb_img = cv2.imread("rendered/render_no_compositing_0.png")
+rgb_img = cv2.imread("chybadobre/render_no_compositing3.png")
 rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
 
 print("DEBUG: depth_img.shape =", depth_img.shape)
@@ -484,7 +536,6 @@ plt.legend(loc="lower right")
 plt.title("Local Fill, only within %d px" % max_radius)
 plt.axis("off")
 plt.show()
-
 depth_filled_filtered = filter_depth_with_local_min_scipy(depth_filled)
 # 8) Now back-project only those pixels into 3D in the RGB frame:
 valid_pixels = ~np.isnan(depth_filled_filtered)
@@ -525,3 +576,5 @@ plt.colorbar(label="Depth [m]")
 plt.title("Reprojected Depth Map (jet)")
 plt.axis("off")
 plt.show()
+
+save_projected_depth_image(points_rgb, K_rgb, rgb_img.shape[:2])
