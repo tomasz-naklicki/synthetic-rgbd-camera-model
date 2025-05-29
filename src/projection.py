@@ -8,6 +8,26 @@ from scipy.interpolate import griddata
 from scipy.ndimage import minimum_filter
 
 
+def filter_depth_with_local_min_scipy(
+    depth_img: np.ndarray, kernel_size: int = 3
+) -> np.ndarray:
+    """
+    Jak wyżej, ale korzysta z scipy.ndimage.minimum_filter.
+    """
+    mask_valid = np.isfinite(depth_img) & (depth_img > 0)
+    # NaN → +inf, aby nie brać ich pod uwagę
+    depth_inf = np.where(mask_valid, depth_img, np.inf)
+
+    # aplikuj minimum_filter
+    local_min = minimum_filter(
+        depth_inf, size=kernel_size, mode="constant", cval=np.inf
+    )
+
+    # zachowaj oryginalne NaN-y
+    filtered = np.where(mask_valid, np.minimum(depth_img, local_min), depth_img)
+    return filtered.astype(np.float32)
+
+
 class ProjectionManager:
     def __init__(
         self, rgb_params: dict, depth_params: dict, transformation_matrix: list
@@ -29,103 +49,6 @@ class ProjectionManager:
             ]
         )
         self.T = transformation_matrix
-
-    def equisolid_undistortPoints(self, pts: np.ndarray, K, D=None, P=None, eps=1e-8):
-        """
-        Odwraca projekcję Equisolid-Angle (Fisheye Equisolid) do zwykłych,
-        niezdystorsowanych współrzędnych.
-
-        Wejście:
-        pts - tablica o kształcie (N,1,2) lub (N,2) z pikselowymi współrzędnymi [u,v]
-        K   - macierz wewnętrzna kamery 3x3 (fx, fy, cx, cy)
-        D   - ignorowane (tu dla zgodności z cv2.undistortPoints)
-        P   - gdy podane, traktowane jak nowa macierz kamery; punkty
-                zwracane będą od razu w pikselach tej macierzy.
-                Jeśli P=None, zwracamy Nx1x2 współrzędnych znormalizowanych.
-
-        Zwraca:
-        tablicę kształtu (N,1,2) z (x, y) -
-            * albo w znormalizowanych jednostkach (gdy P=None),
-            * albo w pikselach (gdy podasz macierz P).
-        """
-        pts_arr = pts.reshape(-1, 2).astype(np.float64)
-        fx, fy = K[0, 0], K[1, 1]
-        cx, cy = K[0, 2], K[1, 2]
-
-        # 1) z pikseli na "znormalizowane" equisolid
-        x_d = (pts_arr[:, 0] - cx) / fx
-        y_d = (pts_arr[:, 1] - cy) / fy
-        r_d = np.hypot(x_d, y_d)
-
-        # 2) theta ze wzoru r_d_norm = 2*sin(theta/2)
-        #    -> theta = 2*arcsin(r_d/2)
-        arg = np.clip(r_d / 2, -1.0, 1.0)
-        theta = 2.0 * np.arcsin(arg)
-
-        # 3) przemapowanie do perspektywy: r_p = tan(theta)
-        r_p = np.tan(theta)
-
-        # 4) odbudowa składowych
-        #    gdy r_d~0, unikamy dzielenia przez zero
-        u = np.where(r_d > eps, x_d / r_d * r_p, 0.0)
-        v = np.where(r_d > eps, y_d / r_d * r_p, 0.0)
-
-        out = np.stack([u, v], axis=-1)
-
-        if P is not None:
-            # jeśli podano nową macierz projekcji, rzutujemy na pixele P
-            fx2, fy2 = P[0, 0], P[1, 1]
-            cx2, cy2 = P[0, 2], P[1, 2]
-            out = np.stack([out[:, 0] * fx2 + cx2, out[:, 1] * fy2 + cy2], axis=-1)
-
-        return out.reshape(-1, 1, 2).astype(np.float32)
-
-    def filter_depth_with_local_average(
-        self, depth_img: np.ndarray, kernel_size: int = 3
-    ) -> np.ndarray:
-        """
-        For each pixel, compare its depth value to the average of the valid surrounding pixels.
-        Replace it with the closer value (min of both).
-
-        Parameters:
-            depth_img: 2D array of float32 values (depth in meters).
-            kernel_size: Size of the square neighborhood (default: 3x3).
-
-        Returns:
-            Filtered depth image (same shape, dtype float32).
-        """
-        mask_valid = np.isfinite(depth_img) & (depth_img > 0)
-        kernel = np.ones((kernel_size, kernel_size), dtype=np.float32)
-
-        sum_valid = cv2.filter2D(mask_valid.astype(np.float32), -1, kernel)
-        sum_depth = cv2.filter2D(np.nan_to_num(depth_img) * mask_valid, -1, kernel)
-
-        avg_depth = np.divide(
-            sum_depth, sum_valid, out=np.zeros_like(sum_depth), where=sum_valid > 0
-        )
-        filtered_depth = np.where(
-            mask_valid, np.minimum(depth_img, avg_depth), depth_img
-        )
-        return filtered_depth
-
-    def filter_depth_with_local_min_scipy(
-        self, depth_img: np.ndarray, kernel_size: int = 3
-    ) -> np.ndarray:
-        """
-        Jak wyżej, ale korzysta z scipy.ndimage.minimum_filter.
-        """
-        mask_valid = np.isfinite(depth_img) & (depth_img > 0)
-        # NaN → +inf, aby nie brać ich pod uwagę
-        depth_inf = np.where(mask_valid, depth_img, np.inf)
-
-        # aplikuj minimum_filter
-        local_min = minimum_filter(
-            depth_inf, size=kernel_size, mode="constant", cval=np.inf
-        )
-
-        # zachowaj oryginalne NaN-y
-        filtered = np.where(mask_valid, np.minimum(depth_img, local_min), depth_img)
-        return filtered.astype(np.float32)
 
     # --- Step 1: Project Depth Image to 3D Point Cloud in Depth Camera Frame ---
     def depth_image_to_point_cloud_with_K(self, depth_img, K, dist_coeffs):
@@ -155,7 +78,6 @@ class ProjectionManager:
         # 3) Undistortuj te piksele do normalizowanych współrzędnych promienia
         pts = uv.reshape(-1, 1, 2).astype(np.float32)
         undist = cv2.undistortPoints(pts, K, dist_coeffs, P=None)  # shape=(N,1,2)
-        # undist = equisolid_undistortPoints(pts, K_depth, D=None, P=None)
         x_norm = undist[:, 0, 0]
         y_norm = undist[:, 0, 1]
 
@@ -409,7 +331,7 @@ class ProjectionManager:
         ok = ~np.isnan(filled_vals)
         depth_filled[rf[ok], cf[ok]] = filled_vals[ok]
 
-        depth_filled_filtered = self.filter_depth_with_local_min_scipy(depth_filled)
+        depth_filled_filtered = filter_depth_with_local_min_scipy(depth_filled)
         # 8) Now back-project only those pixels into 3D in the RGB frame:
         valid_pixels = ~np.isnan(depth_filled_filtered)
         vs, us = np.where(valid_pixels)  # row, col of only the good depths
@@ -432,12 +354,44 @@ class ProjectionManager:
         o3d.io.write_point_cloud("output/colored_pointcloud_local_fill.ply", pcd)
 
         print(f"filled: {pcd}")
-        # 5) Wyświetl z domyślnym framingiem
-        o3d.visualization.draw_geometries(
-            [pcd], window_name="Radius Outlier Removal", width=1920, height=1080
-        )
-
         depth_img_aligned = self._get_projected_depth_image(
             points_rgb, self.K_rgb, rgb_img.shape[:2]
         )
+        return depth_img_aligned
+
+    def get_aligned_depth_img_no_interp(
+        self, depth_img: np.ndarray, rgb_img: np.ndarray
+    ) -> np.ndarray:
+        """
+        Projects depth image into RGB frame using point cloud and camera calibration.
+        Skips all interpolation/inpainting steps.
+
+        Parameters:
+            depth_img: 2D depth map in millimeters (uint16)
+            rgb_img: RGB image (H, W, 3)
+
+        Returns:
+            Aligned depth image in RGB frame, dtype uint16
+        """
+        # Step 1: Get point cloud from depth image
+        point_cloud_depth = self.depth_image_to_point_cloud_with_K(
+            depth_img, self.K_depth, dist_coeffs=self.depth_params["dist"]
+        )
+
+        # Step 2: Transform point cloud to RGB space
+        point_cloud_rgb = self.transform_point_cloud_to_rgb(point_cloud_depth, self.T)
+
+        # Step 3: Project onto RGB image and keep closest point per pixel
+        proj1, filt_depth1, idx, colors = self.project_points_to_pixels_filtered(
+            rgb_img, point_cloud_rgb, self.K_rgb, rgb_img.shape[:2]
+        )
+
+        # Step 4: Keep only filtered subset of the RGB-space point cloud
+        filtered_points_rgb = point_cloud_rgb[idx]
+
+        # Step 5: Generate aligned depth image without interpolation
+        depth_img_aligned = self._get_projected_depth_image(
+            filtered_points_rgb, self.K_rgb, rgb_img.shape[:2]
+        )
+
         return depth_img_aligned

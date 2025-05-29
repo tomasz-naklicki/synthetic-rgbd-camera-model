@@ -70,7 +70,9 @@ class ImageProcessor:
         rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
         depth_img = cv2.imread(image_pair_path[1], cv2.IMREAD_UNCHANGED)
 
-        preprocessed_depth_img = self.preprocessing.get_processed_image(depth_img)
+        preprocessed_depth_img = self.preprocessing.get_processed_image(
+            depth_img, rgb_img
+        )
         depth_img_aligned = self.projection.get_aligned_depth_img(
             preprocessed_depth_img, rgb_img
         )

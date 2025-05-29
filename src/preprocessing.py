@@ -1,5 +1,7 @@
 import numpy as np
+import cv2
 from scipy.ndimage import map_coordinates, gaussian_filter
+from src.projection import filter_depth_with_local_min_scipy
 
 
 def circular_kernel(radius):
@@ -10,8 +12,9 @@ def circular_kernel(radius):
 
 class PreprocessingManager:
     def __init__(self, params: dict):
-        self.params_rgb = params["rgb"]
-        self.params_depth = params["depth"]
+        self.rgb_params = params["rgb"]
+        self.depth_params = params["depth"]
+        self.T = params["T"]
 
     def _add_lateral_noise_remap(self, Z, fx, px, cx, cy, max_delta=0.03):
         """
@@ -75,13 +78,9 @@ class PreprocessingManager:
         noise = np.random.randn(H, W) * sigma_z
         return Z + noise
 
-    def _compute_incidence_with_random_distance(
+    def _compute_drop_prob_from_angle(
         self,
         depth,
-        fx,
-        fy,
-        cx,
-        cy,
         smoothing_sigma=1.0,
         theta0_deg=75.0,
         slope=50.0,
@@ -95,8 +94,6 @@ class PreprocessingManager:
         ----------
         depth : 2D float array
             Mapa głębi w metrach.
-        fx, fy, cx, cy : float
-            Parametry intrinsics.
         smoothing_sigma : float
             Sigma Gaussa dla wygładzenia głębi.
         theta0_deg : float
@@ -124,8 +121,8 @@ class PreprocessingManager:
         depth_s = gaussian_filter(depth, sigma=smoothing_sigma)
         dzdx = (np.roll(depth_s, -1, axis=1) - np.roll(depth_s, 1, axis=1)) * 0.5
         dzdy = (np.roll(depth_s, -1, axis=0) - np.roll(depth_s, 1, axis=0)) * 0.5
-        Nx = -dzdx * fx
-        Ny = -dzdy * fy
+        Nx = -dzdx * self.depth_params["fx"]
+        Ny = -dzdy * self.depth_params["fy"]
         Nz = np.ones_like(depth_s)
         N = np.stack((Nx, Ny, Nz), axis=-1)
         N /= np.linalg.norm(N, axis=2, keepdims=True) + 1e-8
@@ -133,8 +130,8 @@ class PreprocessingManager:
         # 2) Wektor promienia D
         u = np.arange(w)
         v = np.arange(h)[:, None]
-        X = (u - cx) * depth / fx
-        Y = (v - cy) * depth / fy
+        X = (u - self.depth_params["cx"]) * depth / self.depth_params["fx"]
+        Y = (v - self.depth_params["cy"]) * depth / self.depth_params["fy"]
         P = np.stack((X, Y, depth), axis=-1)
         D = P / (np.linalg.norm(P, axis=2, keepdims=True) + 1e-8)
 
@@ -143,30 +140,56 @@ class PreprocessingManager:
         theta = np.arccos(cos_t)  # w radianach
         # 4) Funkcja logistyczna P(return | θ)
         theta0 = np.deg2rad(theta0_deg)
-        p_ret = 1.0 / (1.0 + np.exp(slope * (theta - theta0)))
+        p_drop = 1.0 - 1.0 / (1.0 + np.exp(slope * (theta - theta0)))
         # 5) Dla punktów bliżej niż depth_min: zawsze wraca
-        p_ret[depth < depth_min] = 1.0
-        p_ret[abs(theta - 90) < 4.0] = 1.0
+        p_drop[depth < depth_min] = 0.0
+        p_drop[abs(theta - 90) < 4.0] = 0.0
+        return p_drop, theta
 
-        # 6) Monte Carlo: jeśli u > p_ret → brak pomiaru
+    def _compute_drop_prob_from_color(
+        self,
+        depth_img: np.ndarray,
+        rgb_img: np.ndarray,
+        theta: np.ndarray,
+        cutoff_v: float = 0.2,
+        angle_thresh: float = 60.0,
+    ):
+        colored_depth = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
+        value = colored_depth[..., 2] / 255.0  # Normalize V ∈ [0, 1]
+
+        brightness_mask = value < cutoff_v
+        angle_mask = theta > np.deg2rad(angle_thresh)
+        combined_mask = brightness_mask & angle_mask
+
+        prob = (1.0 - (value / cutoff_v)) * 0.65
+        drop_prob = np.zeros_like(value, dtype=np.float32)
+        drop_prob[combined_mask] = prob[combined_mask]
+
+        return drop_prob
+
+    def _drop_pixels(self, depth_img: np.ndarray, rgb_img: np.ndarray):
+        p_drop_angle, theta = self._compute_drop_prob_from_angle(depth_img)
+        p_drop_color = self._compute_drop_prob_from_color(depth_img, rgb_img, theta)
+        h, w = depth_img.shape
+        p_drop = p_drop_angle + p_drop_color
+
         u_rand = np.random.rand(h, w)
-        mask_drop = u_rand > p_ret
+        mask_drop = u_rand < p_drop
 
         # 7) Zastosuj maskę
-        depth_out = depth.copy()
+        depth_out = depth_img.copy()
         depth_out[mask_drop] = np.nan
+        return depth_out
 
-        return depth_out, theta
-
-    def get_processed_image(self, depth_image: np.ndarray):
-        Z_img = depth_image
-        W, H = self.params_depth["resolution"]
-        fx, fy = self.params_depth["fx"], self.params_depth["fy"]
+    def get_processed_image(self, depth_img: np.ndarray, rgb_img: np.ndarray):
+        Z_img = depth_img
+        colored_depth = self._get_colors_for_depth(depth_img, rgb_img)
+        fx, fy = self.depth_params["fx"], self.depth_params["fy"]
         cx, cy = (
-            self.params_depth["cx"],
-            self.params_depth["cy"],
+            self.depth_params["cx"],
+            self.depth_params["cy"],
         )
-        px = self.params_depth["px"]
+        px = self.depth_params["px"]
 
         if Z_img.dtype == np.uint16:
             Z = Z_img.astype(np.float32) / 1000.0  # mm -> m
@@ -176,9 +199,7 @@ class PreprocessingManager:
         # Fill max value spots with 0.0
         Z[Z == 65.535] = 0.0
         # Remove pixels above certain angle
-        Z_angles, theta = self._compute_incidence_with_random_distance(
-            Z, fx, fy, cx, cy
-        )
+        Z_angles = self._drop_pixels(Z, colored_depth)
 
         # Add noise
         Z_noisy = self._add_lateral_noise_remap(Z_angles, fx, px, cx, cy)
@@ -189,3 +210,67 @@ class PreprocessingManager:
         Zmm2 = np.clip(Zmm * 1000.0, 0, 65535).astype(np.uint16)
 
         return Zmm2
+
+    def _get_colors_for_depth(
+        self, depth_img: np.ndarray, rgb_img: np.ndarray, depth_scale=1000.0
+    ):
+        H_d, W_d = depth_img.shape
+        H_r, W_r = rgb_img.shape[:2]
+        K_rgb = np.array(
+            [
+                [self.rgb_params["fx"], 0, self.rgb_params["cx"]],
+                [0, self.rgb_params["fy"], self.rgb_params["cy"]],
+                [0, 0, 1],
+            ]
+        )
+        K_depth = np.array(
+            [
+                [self.depth_params["fx"], 0, self.depth_params["cx"]],
+                [0, self.depth_params["fy"], self.depth_params["cy"]],
+                [0, 0, 1],
+            ]
+        )
+
+        # 0. resize & scale intrinsics
+        rgb_resized = cv2.resize(rgb_img, (W_d, H_d), interpolation=cv2.INTER_LINEAR)
+        scale_x, scale_y = W_d / W_r, H_d / H_r
+        Kd = K_depth
+        Kr = K_rgb.copy()
+        Kr[0, 0] *= scale_x
+        Kr[0, 2] *= scale_x
+        Kr[1, 1] *= scale_y
+        Kr[1, 2] *= scale_y
+
+        # 1. przygotuj output i punkty głębi
+        out = np.zeros((H_d, W_d, 3), dtype=rgb_resized.dtype)
+        vs, us = np.where(depth_img > 0)
+        if not len(us):
+            return out
+
+        Z = depth_img[vs, us].astype(np.float32) / depth_scale
+        Z = filter_depth_with_local_min_scipy(Z, kernel_size=49)
+        pts = np.stack([us, vs], axis=1).reshape(-1, 1, 2).astype(np.float32)
+
+        # 2. undistortPoints → normalized coords
+        und = cv2.undistortPoints(
+            pts, Kd, np.array(self.depth_params["dist"], np.float32), P=None
+        )
+        und = und.reshape(-1, 2)
+        x_norm, y_norm = und[:, 0], und[:, 1]
+
+        # 3. back-project & transform
+        X = x_norm * Z
+        Y = y_norm * Z
+        ones = np.ones_like(Z)
+        pts_d_h = np.stack([X, Y, Z, ones], axis=1).T
+        pts_c_h = (self.T @ pts_d_h).T
+        Xc, Yc, Zc = pts_c_h[:, 0], pts_c_h[:, 1], pts_c_h[:, 2]
+
+        # 4. project to rgb
+        u_c = np.round((Kr[0, 0] * Xc / Zc) + Kr[0, 2]).astype(int)
+        v_c = np.round((Kr[1, 1] * Yc / Zc) + Kr[1, 2]).astype(int)
+
+        # 5. mask & fill
+        valid = (u_c >= 0) & (u_c < W_d) & (v_c >= 0) & (v_c < H_d) & (Zc > 0)
+        out[vs[valid], us[valid]] = rgb_resized[v_c[valid], u_c[valid]]
+        return out
