@@ -100,6 +100,7 @@ class ImageProcessor:
             rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
             cv2.imwrite(f"{output_dir}/rgb_{cnt}.png", rgb_img)
             cv2.imwrite(f"{output_dir}/depth_{cnt}.png", depth_img)
+            cnt += 1
 
     def process_single_img_pair(self, rgb_img_path: str, depth_image_path: str):
         output_dir = self._create_output_dir_for_batch()

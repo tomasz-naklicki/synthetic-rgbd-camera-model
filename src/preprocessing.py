@@ -84,7 +84,7 @@ class PreprocessingManager:
         smoothing_sigma=1.0,
         theta0_deg=75.0,
         slope=50.0,
-        depth_min=1.0,
+        depth_min=0.5,
         seed=None,
     ):
         """
@@ -140,11 +140,74 @@ class PreprocessingManager:
         theta = np.arccos(cos_t)  # w radianach
         # 4) Funkcja logistyczna P(return | θ)
         theta0 = np.deg2rad(theta0_deg)
-        p_drop = 1.0 - 1.0 / (1.0 + np.exp(slope * (theta - theta0)))
+
+        # p_drop = 1.0 - 1.0 / (1.0 + np.exp(slope * (theta - theta0)))
+        def p_drop_quad_thresh(theta, theta0_deg=75.0, theta_min_deg=30.0):
+            """
+            Kwadratowa rampa z progiem minimalnym:
+            - dla θ < θ_min p_drop = 0
+            - dla θ ≥ θ_min:
+                p_drop = ((θ - θ_min)/(θ0 - θ_min))^2, obcięte do max 1
+
+            Parametry
+            ---------
+            theta         : float or np.ndarray
+                Kąt padania w radianach.
+            theta0_deg    : float
+                Kąt (w stopniach), przy którym p_drop osiąga 1.
+            theta_min_deg : float
+                Kąt (w stopniach) od którego zaczyna się wzrost p_drop.
+
+            Zwraca
+            ------
+            p_drop : float or np.ndarray
+                Prawdopodobieństwo odrzucenia w [0,1].
+            """
+            # konwersja progów do radianów
+            theta0 = np.deg2rad(theta0_deg)
+            theta_min = np.deg2rad(theta_min_deg)
+            # oblicz rampę tylko tam, gdzie theta ≥ theta_min
+            ramp = (theta - theta_min) / (theta0 - theta_min)
+            # kwadrat z obcięciem
+            p = np.clip(ramp**2, 0.0, 1.0)
+            # zerujemy poniżej progu
+            p = np.where(theta < theta_min, 0.0, p)
+            return p
+
+        p_drop = p_drop_quad_thresh(theta, theta0_deg=75.0, theta_min_deg=60.0)
         # 5) Dla punktów bliżej niż depth_min: zawsze wraca
-        p_drop[depth < depth_min] = 0.0
+        # p_drop[depth < depth_min] = 0.0
         p_drop[abs(theta - 90) < 4.0] = 0.0
         return p_drop, theta
+
+    # def _compute_drop_prob_from_color(
+    #     self,
+    #     depth_img: np.ndarray,
+    #     rgb_img: np.ndarray,
+    #     theta: np.ndarray,
+    #     cutoff_v: float = 0.2,
+    #     angle_thresh: float = 50.0,
+    # ):
+    #     colored_depth = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
+    #     value = colored_depth[..., 2] / 255.0  # Normalize V ∈ [0, 1]
+
+    #     brightness_mask = value < cutoff_v
+    #     angle_mask = theta > np.deg2rad(angle_thresh)
+    #     combined_mask = brightness_mask & angle_mask
+
+    #     def p_drop_logistic_b(v, cutoff_v=0.2, k=0.05, max_prob=0.65):
+    #         """
+    #         Funkcja logistyczna wokół cutoff_v:
+    #         max_prob / (1 + exp((v−cutoff_v)/k))
+    #         """
+    #         return max_prob / (1.0 + np.exp((v - cutoff_v) / k))
+
+    #     # prob = (1.0 - (value / cutoff_v)) * 0.65
+    #     prob = p_drop_logistic_b(value, cutoff_v)
+    #     drop_prob = np.zeros_like(value, dtype=np.float32)
+    #     drop_prob[combined_mask] = prob[combined_mask]
+
+    #     return drop_prob
 
     def _compute_drop_prob_from_color(
         self,
@@ -152,19 +215,43 @@ class PreprocessingManager:
         rgb_img: np.ndarray,
         theta: np.ndarray,
         cutoff_v: float = 0.2,
-        angle_thresh: float = 60.0,
+        angle_thresh: float = 50.0,
+        angle_exponent: float = 2.0,
+        max_prob: float = 0.65,
     ):
-        colored_depth = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
-        value = colored_depth[..., 2] / 255.0  # Normalize V ∈ [0, 1]
+        """
+        Ciągłe maskowanie na podstawie jasności i kąta, bez ostrego progu kąta.
 
-        brightness_mask = value < cutoff_v
-        angle_mask = theta > np.deg2rad(angle_thresh)
-        combined_mask = brightness_mask & angle_mask
+        Zamiast binary maski θ>angle_thresh, bierzemy:
+        w_angle(θ) = clip( (θ/θ_thresh)^angle_exponent , 0, 1 )
 
-        prob = (1.0 - (value / cutoff_v)) * 0.65
-        drop_prob = np.zeros_like(value, dtype=np.float32)
-        drop_prob[combined_mask] = prob[combined_mask]
+        Parametry:
+        ---------
+        cutoff_v        – próg jasności V w HSV, poniżej którego rośnie p_drop
+        angle_thresh    – kąt w stopniach, przy którym w_angle osiąga 1
+        angle_exponent  – wykładnik rampy kąta (>1: strome zbocze blisko θ_thresh)
+        max_prob        – maksymalne prawdopodobieństwo “drop”
+        """
 
+        # 1) Jasność V
+        hsv = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
+        v = hsv[..., 2] / 255.0  # [0,1]
+
+        # 2) p_brightness: logistyka wokół cutoff_v
+        def p_brightness(v):
+            return max_prob * np.exp(-v / cutoff_v)
+
+        # 3) w_angle: gładka „rampa” kąta
+        #    - normalizujemy θ do [0,1] przez /θ_thresh, potem ^angle_exponent
+        #    - obcinamy, by ≥1 dawać 1
+        angle_thresh_rad = np.deg2rad(angle_thresh)
+
+        def w_angle(theta):
+            ramp = (theta / angle_thresh_rad) ** angle_exponent
+            return np.clip(ramp, 0.0, 1.0)
+
+        # 4) Finalne p_drop jako iloczyn
+        drop_prob = (p_brightness(v) * w_angle(theta)).astype(np.float32)
         return drop_prob
 
     def _drop_pixels(self, depth_img: np.ndarray, rgb_img: np.ndarray):
