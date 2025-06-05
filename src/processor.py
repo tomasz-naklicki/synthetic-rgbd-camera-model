@@ -108,3 +108,8 @@ class ImageProcessor:
         rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
         cv2.imwrite(f"{output_dir}/rgb_0.png", rgb_img)
         cv2.imwrite(f"{output_dir}/depth_0.png", depth_img)
+
+    def process_single_img_pair_no_save(self, rgb_img_path: str, depth_image_path: str):
+        rgb_img, depth_img = self._process_image_pair((rgb_img_path, depth_image_path))
+        rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
+        return rgb_img, depth_img
