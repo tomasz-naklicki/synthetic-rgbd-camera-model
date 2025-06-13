@@ -138,8 +138,6 @@ class PreprocessingManager:
         # 3) Kąt padania θ
         cos_t = N[:, :, 2]  # dot product with [0, 0, 1]
         theta = np.arccos(cos_t)  # w radianach
-        # 4) Funkcja logistyczna P(return | θ)
-        theta0 = np.deg2rad(theta0_deg)
 
         # p_drop = 1.0 - 1.0 / (1.0 + np.exp(slope * (theta - theta0)))
         def p_drop_quad_thresh(theta, theta0_deg=75.0, theta_min_deg=30.0):
