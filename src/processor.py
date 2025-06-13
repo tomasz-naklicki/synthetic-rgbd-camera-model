@@ -11,16 +11,20 @@ from src.projection import ProjectionManager
 
 
 class ImageProcessor:
-    def __init__(self, params_path: str, image_dir: str, output_dir: str):
+    def __init__(self, params_path: str, image_dir: str = None, output_dir: str = None):
         self.output_dir = output_dir
         self.params = self._load_params_from_json(params_path)
-        self.image_paths = self._list_image_pairs(image_dir)
+        self.image_paths = self._list_image_pairs(image_dir) if image_dir else None
         self.preprocessing = PreprocessingManager(params=self.params)
         self.projection = ProjectionManager(
             rgb_params=self.params["rgb"],
             depth_params=self.params["depth"],
             transformation_matrix=self.params["T"],
         )
+        if not image_dir or not output_dir:
+            print(
+                "WARNING: input or output directory not specified. \n Some functionality may not work correctly."
+            )
 
     def _load_params_from_json(self, filepath: str) -> dict:
         def convert(obj: Any) -> Any:

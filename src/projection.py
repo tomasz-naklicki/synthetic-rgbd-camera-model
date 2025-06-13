@@ -1,6 +1,5 @@
 import numpy as np
 import os
-import matplotlib.pyplot as plt
 import cv2
 import open3d as o3d
 import numpy as np
