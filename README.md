@@ -34,7 +34,7 @@ In another terminal within the container:
 ```
 ros2 run rviz2 rviz2
 ```
-The images are published on ```/camera/color``` and ```/camera/depth``` topics
+The images are published on ```/camera/rgb``` and ```/camera/depth``` topics
 ### 6. Provide Image Input
 Place your image pairs in the shared folder specified earlier. The files must follow this naming convention:
 
