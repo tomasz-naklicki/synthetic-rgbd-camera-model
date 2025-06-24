@@ -5,12 +5,31 @@ from src.projection import filter_depth_with_local_min_scipy
 
 
 class PreprocessingManager:
+    """Apply realistic noise and occlusion to synthetic depth images."""
     def __init__(self, params: dict):
+        """Store camera parameters for depth noise modeling.
+
+        Args:
+            params (dict): Contains 'rgb', 'depth', and 'T' entries.
+        """
         self.rgb_params = params["rgb"]
         self.depth_params = params["depth"]
         self.T = params["T"]
 
     def _add_lateral_noise_remap(self, Z, fx, px, cx, cy, max_delta=0.03):
+        """Simulate lateral displacement noise by remapping pixels.
+
+        Args:
+            Z (np.ndarray): Depth map in meters.
+            fx (float): Focal length in pixels.
+            px (float): Pixel size.
+            cx (float): Principal point x-coordinate.
+            cy (float): Principal point y-coordinate.
+            max_delta (float): Max allowed per-pixel depth change (m).
+
+        Returns:
+            np.ndarray: Depth map with lateral noise applied.
+        """
         H, W = Z.shape
         i, j = np.indices((H, W))
         r = np.sqrt((i - cy) ** 2 + (j - cx) ** 2) * px
@@ -25,6 +44,15 @@ class PreprocessingManager:
         return Z_noisy
 
     def _add_axial_noise(self, Z, fx, px, cx, cy):
+        """Add depth-dependent axial noise to simulate sensor error.
+
+        Args:
+            Z (np.ndarray): Depth map in meters.
+            fx, px, cx, cy (float): Camera intrinsics.
+
+        Returns:
+            np.ndarray: Depth map with axial noise added.
+        """
         H, W = Z.shape
         i, j = np.indices((H, W))
 
@@ -51,6 +79,21 @@ class PreprocessingManager:
         depth_min=0.5,
         seed=None,
     ):
+        """Compute per-pixel drop probability based on surface angle.
+
+        Args:
+            depth (np.ndarray): Depth map (m).
+            smoothing_sigma (float): Gaussian blur sigma.
+            theta0_deg (float): Max incidence angle for drop ramp.
+            slope (float): Unused legacy parameter.
+            depth_min (float): Minimum depth threshold.
+            seed (int, optional): RNG seed for reproducibility.
+
+        Returns:
+            tuple:
+                - p_drop (np.ndarray): Drop probability [0,1].
+                - theta (np.ndarray): Local incidence angle (rad).
+        """
         if seed is not None:
             np.random.seed(seed)
 
@@ -98,6 +141,22 @@ class PreprocessingManager:
         angle_exponent: float = 2.0,
         max_prob: float = 0.65,
     ):
+        """Compute additional drop probability based on surface brightness.
+
+        Darker/steep regions are more likely to drop.
+
+        Args:
+            depth_img (np.ndarray): Depth in raw units.
+            rgb_img (np.ndarray): RGB image (H×W×3).
+            theta (np.ndarray): Incidence angles from `_compute_drop_prob_from_angle`.
+            cutoff_v (float): Brightness cutoff.
+            angle_thresh (float): Angle threshold in degrees.
+            angle_exponent (float): Exponent for angle weighting.
+            max_prob (float): Max drop probability factor.
+
+        Returns:
+            np.ndarray: Per-pixel drop probability [0,1].
+        """
         hsv = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
         v = hsv[..., 2] / 255.0
 
@@ -114,6 +173,15 @@ class PreprocessingManager:
         return drop_prob
 
     def _drop_pixels(self, depth_img: np.ndarray, rgb_img: np.ndarray):
+        """Randomly drop pixels according to combined angle+color probabilities.
+
+        Args:
+            depth_img (np.ndarray): Depth in meters.
+            rgb_img (np.ndarray): RGB image.
+
+        Returns:
+            np.ndarray: Depth map with dropped pixels set to NaN.
+        """
         p_drop_angle, theta = self._compute_drop_prob_from_angle(depth_img)
         p_drop_color = self._compute_drop_prob_from_color(depth_img, rgb_img, theta)
         h, w = depth_img.shape
@@ -127,6 +195,19 @@ class PreprocessingManager:
         return depth_out
 
     def get_processed_image(self, depth_img: np.ndarray, rgb_img: np.ndarray):
+        """Full noise & occlusion simulation pipeline for depth.
+
+        1. Compute drop mask → NaNs for occlusion.
+        2. Add lateral and axial noise.
+        3. Quantize back to uint16 and save preview.
+
+        Args:
+            depth_img (np.ndarray): Raw depth (uint16 mm or float32 m).
+            rgb_img (np.ndarray): Corresponding RGB image.
+
+        Returns:
+            np.ndarray: Processed depth image as uint16 (mm).
+        """
         Z_img = depth_img
         colored_depth = self._get_colors_for_depth(depth_img, rgb_img)
         fx, fy = self.depth_params["fx"], self.depth_params["fy"]
@@ -156,6 +237,16 @@ class PreprocessingManager:
     def _get_colors_for_depth(
         self, depth_img: np.ndarray, rgb_img: np.ndarray, depth_scale=1000.0
     ):
+        """Project RGB colors into depth resolution for drop modeling.
+
+        Args:
+            depth_img (np.ndarray): Depth array in raw units.
+            rgb_img (np.ndarray): RGB image at full resolution.
+            depth_scale (float): Scale factor from raw units to meters.
+
+        Returns:
+            np.ndarray: H×W×3 color image aligned with depth pixels.
+        """
         H_d, W_d = depth_img.shape
         H_r, W_r = rgb_img.shape[:2]
         K_rgb = np.array(

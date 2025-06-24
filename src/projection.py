@@ -8,9 +8,18 @@ from src.utils import filter_depth_with_local_min_scipy
 
 
 class ProjectionManager:
+    """Handles conversion between depth images and point clouds, and reprojection."""
     def __init__(
         self, rgb_params: dict, depth_params: dict, transformation_matrix: list
     ):
+        """Initialize with camera intrinsics and extrinsic transform.
+
+        Args:
+            rgb_params (dict): Intrinsics for RGB camera (fx, fy, cx, cy).
+            depth_params (dict): Intrinsics for depth camera, plus distortion.
+            transformation_matrix (list or np.ndarray): 4×4 transform from
+                depth-camera frame to RGB-camera frame.
+        """
         self.rgb_params = rgb_params
         self.depth_params = depth_params
         self.K_rgb = np.array(
@@ -30,6 +39,16 @@ class ProjectionManager:
         self.T = transformation_matrix
 
     def depth_image_to_point_cloud_with_K(self, depth_img, K, dist_coeffs):
+        """Back-project a depth map to a 3D point cloud, undistorting as needed.
+
+        Args:
+            depth_img (np.ndarray): 2D depth image in raw units (e.g., mm).
+            K (np.ndarray): 3×3 camera intrinsic matrix.
+            dist_coeffs (array-like): Distortion coefficients for undistortion.
+
+        Returns:
+            np.ndarray: N×3 array of 3D points in the camera frame (meters).
+        """
         H, W = depth_img.shape
         depth_m = depth_img.astype(np.float32) / 1000.0
         u, v = np.meshgrid(np.arange(W), np.arange(H))
@@ -56,6 +75,15 @@ class ProjectionManager:
         return points
 
     def transform_point_cloud_to_rgb(self, point_cloud, T):
+        """Apply a 4×4 transform to bring points into RGB camera frame.
+
+        Args:
+            point_cloud (np.ndarray): N×3 array of points in depth frame.
+            T (np.ndarray): 4×4 homogeneous transformation matrix.
+
+        Returns:
+            np.ndarray: N×3 array of points in RGB camera frame.
+        """
         N = point_cloud.shape[0]
         ones = np.ones((N, 1), dtype=np.float32)
         points_hom = np.hstack((point_cloud, ones))
@@ -72,6 +100,21 @@ class ProjectionManager:
     def project_points_to_pixels_filtered(
         self, rgb_img, points_rgb, K_rgb, image_shape
     ):
+        """Project 3D points to pixel coordinates, keeping only closest per-pixel.
+
+        Args:
+            rgb_img (np.ndarray): RGB image array.
+            points_rgb (np.ndarray): N×3 points in RGB camera frame.
+            K_rgb (np.ndarray): 3×3 intrinsics of RGB camera.
+            image_shape (tuple): (height, width) of the image.
+
+        Returns:
+            tuple:
+                - proj_pixels (np.ndarray): M×2 float pixel coordinates.
+                - filtered_depths (np.ndarray): M depth values (meters).
+                - indices (list[int]): Indices of kept points.
+                - colors (np.ndarray): M×3 RGB colors normalized to [0,1].
+        """
         H, W = image_shape
 
         x = points_rgb[:, 0]
@@ -125,6 +168,18 @@ class ProjectionManager:
         image_shape: tuple,
         output_path: str = "output/depth_aligned_16bit.png",
     ):
+        """Render a depth image from 3D points in RGB frame without interpolation.
+
+        Args:
+            points_rgb (np.ndarray): M×3 points in RGB camera frame (meters).
+            K_rgb (np.ndarray): 3×3 intrinsics of RGB camera.
+            image_shape (tuple): (height, width) for output image.
+            output_path (str, optional): Path to save uint16 depth PNG
+                (not currently written here). Defaults to above.
+
+        Returns:
+            np.ndarray: H×W uint16 depth image (0 = no data).
+        """
         H, W = image_shape
         depth_img = np.full((H, W), 0, dtype=np.uint16)
 
@@ -154,6 +209,20 @@ class ProjectionManager:
         return depth_img
 
     def get_aligned_depth_img(self, depth_img: np.ndarray, rgb_img: np.ndarray):
+        """Full pipeline: align a processed depth image to the RGB frame.
+
+        1. Back-project depth → 3D points.
+        2. Transform to RGB frame.
+        3. Project and interpolate missing pixels.
+        4. Filter and re-project to depth image.
+
+        Args:
+            depth_img (np.ndarray): 2D depth map (uint16 or float32).
+            rgb_img (np.ndarray): Corresponding RGB image (H×W×3).
+
+        Returns:
+            np.ndarray: Aligned uint16 depth image in RGB resolution.
+        """
         point_cloud_depth = self.depth_image_to_point_cloud_with_K(
             depth_img, self.K_depth, dist_coeffs=self.depth_params["dist"]
         )
@@ -250,6 +319,15 @@ class ProjectionManager:
     def get_aligned_depth_img_no_interp(
         self, depth_img: np.ndarray, rgb_img: np.ndarray
     ) -> np.ndarray:
+        """Simplified alignment: no interpolation, just nearest-depth reprojection.
+
+        Args:
+            depth_img (np.ndarray): Raw depth map.
+            rgb_img (np.ndarray): RGB image.
+
+        Returns:
+            np.ndarray: Aligned uint16 depth image.
+        """
         point_cloud_depth = self.depth_image_to_point_cloud_with_K(
             depth_img, self.K_depth, dist_coeffs=self.depth_params["dist"]
         )
