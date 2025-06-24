@@ -79,8 +79,6 @@ class PreprocessingManager:
             smoothing_sigma (float): Gaussian blur sigma.
             theta0_deg (float): Max incidence angle for drop ramp.
             theta_min_deg (float): Minimum angle for drop ramp
-            slope (float): Unused legacy parameter.
-            depth_min (float): Minimum depth threshold.
             seed (int, optional): RNG seed.
 
         Returns:
