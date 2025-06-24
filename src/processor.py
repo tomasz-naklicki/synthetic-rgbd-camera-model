@@ -11,15 +11,7 @@ from src.projection import ProjectionManager
 
 
 class ImageProcessor:
-    """Orchestrates preprocessing and projection to generate aligned RGB-D outputs."""
     def __init__(self, params_path: str, image_dir: str = None, output_dir: str = None):
-        """Load parameters and set up processing pipeline.
-
-        Args:
-            params_path (str): Path to JSON file containing camera and transform params.
-            image_dir (str, optional): Directory containing rgb_<n>.png and depth_<n>.png pairs.
-            output_dir (str, optional): Directory where results will be saved.
-        """
         self.output_dir = output_dir
         self.params = self._load_params_from_json(params_path)
         self.image_paths = self._list_image_pairs(image_dir) if image_dir else None
@@ -35,14 +27,6 @@ class ImageProcessor:
             )
 
     def _load_params_from_json(self, filepath: str) -> dict:
-        """Read JSON parameters and convert lists to numpy types.
-
-        Args:
-            filepath (str): Path to JSON file.
-
-        Returns:
-            dict: Nested dict with tuples and numpy arrays for camera params.
-        """
         def convert(obj: Any) -> Any:
             if isinstance(obj, dict):
                 for k, v in obj.items():
@@ -109,11 +93,6 @@ class ImageProcessor:
         return rgb_img, depth_img_aligned
 
     def _create_output_dir_for_batch(self):
-        """Make a new numbered subfolder under the output directory.
-
-        Returns:
-            str: Path to the newly created subfolder.
-        """
         os.makedirs(self.output_dir, exist_ok=True)
 
         numbered_folders = [

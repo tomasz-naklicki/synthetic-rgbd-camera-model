@@ -5,18 +5,12 @@ from src.projection import filter_depth_with_local_min_scipy
 
 
 class PreprocessingManager:
-    """Apply realistic noise and occlusion to synthetic depth images."""
     def __init__(self, params: dict):
-        """Store camera parameters for depth noise modeling.
-
-        Args:
-            params (dict): Contains 'rgb', 'depth', and 'T' entries.
-        """
         self.rgb_params = params["rgb"]
         self.depth_params = params["depth"]
         self.T = params["T"]
 
-    def _add_lateral_noise_remap(self, Z, fx, px, cx, cy, max_delta=0.03):
+    def _add_lateral_noise_remap(self, Z: np.ndarray, fx, px, cx, cy, max_delta=0.03):
         """Simulate lateral displacement noise by remapping pixels.
 
         Args:
@@ -43,7 +37,7 @@ class PreprocessingManager:
         Z_noisy[diff > max_delta] = Z[diff > max_delta]
         return Z_noisy
 
-    def _add_axial_noise(self, Z, fx, px, cx, cy):
+    def _add_axial_noise(self, Z: np.ndarray, fx, px, cx, cy):
         """Add depth-dependent axial noise to simulate sensor error.
 
         Args:
@@ -75,8 +69,7 @@ class PreprocessingManager:
         depth,
         smoothing_sigma=1.0,
         theta0_deg=75.0,
-        slope=50.0,
-        depth_min=0.5,
+        theta_min_deg=60.0,
         seed=None,
     ):
         """Compute per-pixel drop probability based on surface angle.
@@ -85,9 +78,10 @@ class PreprocessingManager:
             depth (np.ndarray): Depth map (m).
             smoothing_sigma (float): Gaussian blur sigma.
             theta0_deg (float): Max incidence angle for drop ramp.
+            theta_min_deg (float): Minimum angle for drop ramp
             slope (float): Unused legacy parameter.
             depth_min (float): Minimum depth threshold.
-            seed (int, optional): RNG seed for reproducibility.
+            seed (int, optional): RNG seed.
 
         Returns:
             tuple:
@@ -118,7 +112,7 @@ class PreprocessingManager:
         cos_t = N[:, :, 2]
         theta = np.arccos(cos_t)
 
-        def p_drop_quad_thresh(theta, theta0_deg=75.0, theta_min_deg=30.0):
+        def p_drop_quad_thresh(theta, theta0_deg, theta_min_deg):
 
             theta0 = np.deg2rad(theta0_deg)
             theta_min = np.deg2rad(theta_min_deg)
@@ -127,7 +121,7 @@ class PreprocessingManager:
             p = np.where(theta < theta_min, 0.0, p)
             return p
 
-        p_drop = p_drop_quad_thresh(theta, theta0_deg=75.0, theta_min_deg=60.0)
+        p_drop = p_drop_quad_thresh(theta, theta0_deg, theta_min_deg)
         p_drop[abs(theta - 90) < 4.0] = 0.0
         return p_drop, theta
 
@@ -147,7 +141,7 @@ class PreprocessingManager:
 
         Args:
             depth_img (np.ndarray): Depth in raw units.
-            rgb_img (np.ndarray): RGB image (H×W×3).
+            rgb_img (np.ndarray): RGB image (HxWx3).
             theta (np.ndarray): Incidence angles from `_compute_drop_prob_from_angle`.
             cutoff_v (float): Brightness cutoff.
             angle_thresh (float): Angle threshold in degrees.
@@ -245,7 +239,7 @@ class PreprocessingManager:
             depth_scale (float): Scale factor from raw units to meters.
 
         Returns:
-            np.ndarray: H×W×3 color image aligned with depth pixels.
+            np.ndarray: HxWx3 color image aligned with depth pixels.
         """
         H_d, W_d = depth_img.shape
         H_r, W_r = rgb_img.shape[:2]

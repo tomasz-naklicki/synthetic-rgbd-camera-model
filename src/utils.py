@@ -3,18 +3,6 @@ from scipy.ndimage import minimum_filter
 
 
 def circular_kernel(radius):
-    """Create a binary circular kernel of a given radius.
-
-    Generates a square (2*radius+1)×(2*radius+1) array where pixels
-    within the circle of the specified radius are 1, and others 0.
-
-    Args:
-        radius (int): Radius of the circle in pixels.
-
-    Returns:
-        np.ndarray: A 2D uint8 array of shape (2*radius+1, 2*radius+1)
-                    containing the circular mask.
-    """
     y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
     mask = x**2 + y**2 <= radius**2
     return mask.astype(np.uint8)
@@ -31,7 +19,7 @@ def filter_depth_with_local_min_scipy(
 
     Args:
         depth_img (np.ndarray): 2D array of depth values (float32 or float64).
-        kernel_size (int, optional): Side-length of the square neighborhood
+        kernel_size (int, optional): Size of a kernel used
             for minimum filtering. Defaults to 3.
 
     Returns:
