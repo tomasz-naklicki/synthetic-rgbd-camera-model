@@ -43,14 +43,15 @@ class ImageProcessor:
         return convert(data)
 
     def _list_image_pairs(self, image_dir: str) -> List[Tuple[str, str]]:
-        """
-        Returns a list of (rgb_<n>.png, depth_<n>.png) path tuples from the given directory.
+        """Find matching RGB/depth PNG pairs in a directory.
+
+        Expects names like rgb_0.png and depth_0.png.
 
         Args:
-            directory_path (str): The path to the directory to search.
+        image_dir (str): Directory to search.
 
         Returns:
-            List[Tuple[str, str]]: A list of matched .png file path pairs.
+        List[Tuple[str, str]]: List of (rgb_path, depth_path) pairs.
         """
         pattern = re.compile(r"(rgb|depth)_(\d+)\.png$", re.IGNORECASE)
         files = Path(image_dir).iterdir()
@@ -70,6 +71,14 @@ class ImageProcessor:
         ]
 
     def _process_image_pair(self, image_pair_path: List[Tuple[str, str]]):
+        """Load, preprocess, and align a single RGB-depth image pair.
+
+        Args:
+            image_pair_path (Tuple[str, str]): (rgb_path, depth_path).
+
+        Returns:
+            tuple: (RGB image array, aligned depth image array).
+        """
         rgb_img = cv2.imread(image_pair_path[0])
         rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
         depth_img = cv2.imread(image_pair_path[1], cv2.IMREAD_UNCHANGED)
@@ -97,6 +106,10 @@ class ImageProcessor:
         return new_folder_path
 
     def process_and_save_all_images(self):
+        """Process every image pair in the input directory and save results.
+
+        Saves into a new numbered batch folder under `self.output_dir`.
+        """
         cnt = 0
         output_dir = self._create_output_dir_for_batch()
         for pair in self.image_paths:
@@ -107,6 +120,12 @@ class ImageProcessor:
             cnt += 1
 
     def process_single_img_pair(self, rgb_img_path: str, depth_image_path: str):
+        """Process one image pair and save into a new batch folder.
+
+        Args:
+            rgb_img_path (str): Path to RGB image.
+            depth_image_path (str): Path to depth image.
+        """
         output_dir = self._create_output_dir_for_batch()
         rgb_img, depth_img = self._process_image_pair((rgb_img_path, depth_image_path))
         rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
@@ -114,6 +133,15 @@ class ImageProcessor:
         cv2.imwrite(f"{output_dir}/depth_0.png", depth_img)
 
     def process_single_img_pair_no_save(self, rgb_img_path: str, depth_image_path: str):
+        """Process one image pair and return results without saving.
+
+        Args:
+            rgb_img_path (str): Path to RGB image.
+            depth_image_path (str): Path to depth image.
+
+        Returns:
+            tuple: (BGR-formatted RGB image, aligned depth image).
+        """
         rgb_img, depth_img = self._process_image_pair((rgb_img_path, depth_image_path))
         rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
         return rgb_img, depth_img
