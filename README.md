@@ -32,12 +32,16 @@ depth_noisy = proc.get_processed_image(depth_img, rgb_img)
 
 ### Align Depth to RGB
 
-```from projection import ProjectionManager
+```
+from projection import ProjectionManager
 proj = ProjectionManager(rgb_params, depth_params, T)
-aligned = proj.get_aligned_depth_img(depth_noisy, rgb_img)``` 
+aligned = proj.get_aligned_depth_img(depth_noisy, rgb_img)
+``` 
 
 ### Batch Processing
 
-```from processor import ImageProcessor
+```
+from processor import ImageProcessor
 processor = ImageProcessor('params.json', 'input_dir', 'output_dir')
-processor.process_and_save_all_images()```
+processor.process_and_save_all_images()
+```
