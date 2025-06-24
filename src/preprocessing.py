@@ -150,7 +150,6 @@ class PreprocessingManager:
 
         Zmm = np.where(np.isnan(Z_final), 0.0, Z_final)
         Zmm2 = np.clip(Zmm * 1000.0, 0, 65535).astype(np.uint16)
-        cv2.imwrite("./output/do_pracy/depth_unaligned_processed.png", Zmm2)
 
         return Zmm2
 
