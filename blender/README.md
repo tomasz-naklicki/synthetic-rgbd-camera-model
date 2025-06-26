@@ -2,6 +2,7 @@
 Script used in Blender for scene generation and rendering. It creates a base scene and places objects from YCB dataset into it. This pipeline can be followed by adding the script to a Blender project with some changes to settings.
 
 ## Compositing
+![blender_compositing](https://github.com/user-attachments/assets/fbe78e4c-e2af-4b1c-9c7a-fbab9f2d22a9)
 To acquire depth data, Blender’s Compositing settings were used. The following nodes were used:
 - Render Layers - used to acquire depth data,
 - Multiply - data was multiplied by 1000, to emulate the internal multiplier used in Orbbec
