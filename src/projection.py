@@ -55,8 +55,8 @@ class ProjectionManager:
 
         denom = np.sqrt(1.0 + x_norm**2 + y_norm**2)
         Z_cam = Z / denom
-        X = x_norm * Z
-        Y = y_norm * Z
+        # X = x_norm * Z
+        # Y = y_norm * Z
         X = x_norm * Z_cam
         Y = y_norm * Z_cam
         Z = Z_cam
